@@ -1,0 +1,58 @@
+;-----------------------------------------------------------------------------------------------------------------------
+;----------------------------------------------------- simulation ------------------------------------------------------
+;-----------------------------------------------------------------------------------------------------------------------
+
+(load "basic")
+(load "protocol")
+(load "device")
+(load "xbee-simulation")
+(load "simulation-steward")
+
+(define (start-simulation ip)
+  ;abstracties
+  (define simulation-node cons)
+  (define get-name car)
+  (define steward-thread cdr)
+  
+  (let ((in-port 0)
+        (out-port 0)
+        (stewards '()))
+    
+    (let ((port-pair (tcp-connect ip 6666)))
+      (set! in-port (car port-pair))
+      (set! out-port (cdr port-pair)))   
+    
+    (define (add-steward steward-name)
+      (let ((steward (make-steward steward-name ip)))
+        (set! stewards (conjoin (simulation-node steward-name steward) stewards))))
+    
+    (define (remove-steward steward-name)
+      (erase-by-copy stewards steward-name (lambda (stew-list stew-name)(equal? stew-name (get-name (first stew-list))))))
+    
+    
+    (define (process)
+      (if (char-ready? in-port)
+          (let ((list-of-strings (string->args (read in-port))))
+            (cond
+              ((equal? (first list-of-strings) "add-steward")
+(add-steward (next list-of-strings)))
+              ((equal? (first list-of-strings) "remove-steward")(remove-steward (next list-of-strings)))
+              (else (begin (display "error simulation: unkown message")
+                           (for-each (lambda (x)(display " ")(display x)) list-of-strings)(newline)))))))
+    
+    (define (wait x)
+      (if (zero? x)
+          'return
+          (wait (- x 1))))
+    
+    (define (loop)
+(for-each update (map cdr stewards))
+ (process)
+(sleep 1000)
+      (loop))
+    
+    (loop)
+    ))
+
+;(start-simulation ip)
+

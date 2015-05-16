@@ -1,0 +1,124 @@
+;-----------------------------------------------------------------------------------------------------------------------
+;------------------------------------------------------ unit-test ------------------------------------------------------
+;-----------------------------------------------------------------------------------------------------------------------
+
+(load "protocol")
+(load "basic")
+(load "device")
+(load "simulation-steward")
+(load "xbee-simulation")
+
+(define (check-equal? expression1 expression2 message)
+  (if (not (equal? expression1 expression2))
+      (begin 
+        (display "----------------------------")(newline)
+        (display "Failure")(newline)
+        (display "name: check-equal?")(newline)
+        (display "expression: (check-equal ")(display expression1)(display " ")(display expression2)(display ")")(newline)
+        (display "message: ''")(display message)(display "''")(newline)
+        (display "actual: ")(display expression1)(newline)
+        (display "expected: ")(display expression2)(newline)
+        (newline)
+        (display "Check failure")(newline)
+        (display "----------------------------")(newline))))
+
+
+(define (test-device)
+  (define device (make-device))  
+  (check-equal? (device (to-xbee "GET"))
+                #u8(144 0 19 162 0 64 155 139 45 198 181 1 80 79 87 61 79 70 70 10 87 79 82 75 61 48 46 49 52 49 107 87 104 10 10)  
+                "get data of a sleeping device")  
+  (check-equal? (device-power (device (to-xbee "GET")))
+                "OFF"
+                "check power of a sleeping device")
+  (check-equal? (device-usage (device (to-xbee "GET")))
+                0
+                "check usage of a sleeping device")
+  (check-equal? (device (to-xbee "SET POW=ON"))
+                #u8(144 0 19 162 0 64 155 139 45 198 181 1 97 99 107 58 32 115 101 116 32 112 111 119 61 111 110 10 10)
+                "turn power on of a sleeping device")
+  (check-equal? (device (to-xbee "GET"))
+                #u8(144 0 19 162 0 64 155 139 45 198 181 1 80 79 87 61 79 78 10 70 82 69 81 61 52 57 46 55 53 48 48 72 122 10 86 82 77 83 61 50 50 56 86 10 73 82 77 83 61 49 55 56 109 65 10 76 79 65 68 61 53 87 10 87 79 82 75 61 48 46 49 52 49 107 87 104 10 10)
+                "get data from a working device")
+  (check-equal? (device-power (device (to-xbee "GET")))
+                "ON"
+                "check power of a working device")
+  (check-equal? (device-usage (device (to-xbee "GET")))
+                5
+                "check usage of a working device")
+  (check-equal? (device (to-xbee "SET POW=OFF"))
+                #u8(144 0 19 162 0 64 155 139 45 198 181 1 97 99 107 58 32 115 101 116 32 112 111 119 61 111 102 102 10 10)
+                "turn power off of working device")
+  "all good for device"
+  )
+
+(define (test-steward)
+  (display "start 'unit-test2' now, don't forget to give input, type stop when done")(newline)
+  (define connection (tcp-accept 6666))
+  
+  (check-equal? 
+   (begin (write "add-device.device1.6.ZZZZZZZZZZZZ00" (cdr connection))
+          (flush-output (cdr connection))
+          (read (car connection)))
+   "device added"
+   "add-device 1")
+  (check-equal? 
+   (begin (write "add-device.device2.3.ZZZZZZZZZZZZ01" (cdr connection))
+          (flush-output (cdr connection))
+          (read (car connection)))
+   "device added"
+   "add-device 2")
+  (check-equal? 
+   (begin (write "add-device.device3.2.ZZZZZZZZZZZZ02" (cdr connection))
+          (flush-output (cdr connection))
+          (read (car connection)))
+   "device added"
+   "add-device 3")
+  
+  (check-equal? 
+   (begin (write "get-usage-all" (cdr connection))
+          (flush-output (cdr connection))
+          (read (car connection)))
+   (conjoin (conjoin "device1" 0)(conjoin (conjoin "device3" 0) empty-list))
+   "test usage of all devices")
+  (check-equal? 
+   (begin (write "turned-on?.device1" (cdr connection))
+          (flush-output (cdr connection))
+          (read (car connection)))
+   "OFF"
+   "power of sleeping device")
+  (check-equal?  (begin (write "turn-on.device1" (cdr connection))
+                        (flush-output (cdr connection))
+                        (read (car connection)))
+                 "turned-on"
+                 "turn on device through steward")
+  (check-equal? 
+   (begin (write "get-usage-all" (cdr connection))
+          (flush-output (cdr connection))
+          (read (car connection)))
+   (conjoin (conjoin "device1" 5)(conjoin (conjoin "device3" 0) empty-list))
+   "turn-on device succes?")
+  (check-equal? 
+   (begin (write "turned-on?.device1" (cdr connection))
+          (flush-output (cdr connection))
+          (read (car connection)))
+   "ON"
+   "power of working device")
+  (write "erase-device.device1" (cdr connection))(flush-output (cdr connection))
+  (check-equal?  (begin (write "get-usage-all" (cdr connection))
+                        (flush-output (cdr connection))
+                        (read (car connection)))
+                 (conjoin (conjoin "device3" 0) empty-list)
+                 "check if delete works")
+  "all good for steward"
+  )
+
+;om connectie te maken: ssh pi@ethernet address
+;om files over te sturen: scp sources target (schijden door spatie)
+; scp foo.rkt pi@192.168.1.12:.
+
+;om xbee-port te vinden:
+; ls /dev/ttyusb0*
+
+;(xbee-initialise #"/dev/tty.usbserial-13WRQOF6" 9600) mac
+;(xbee-initialise #"/dev/ttyUSB0" 9600) something something linux

@@ -1,0 +1,16 @@
+;-----------------------------------------------------------------------------------------------------------------------
+;------------------------------------------------------ protocol -------------------------------------------------------
+;-----------------------------------------------------------------------------------------------------------------------
+;protocol is een getal gemaakt uit priemgetallen
+;2 -> heeft electronische gebruik meter
+;3 -> heeft een aan en uit knop
+
+;check of een zekere waarde x deelbaar is door een zekere waarde
+(define (protocol? x check)
+  (zero? (modulo x check)))
+
+(define (usage? x)
+  (protocol? x 2))
+       
+(define (switch? x)
+  (protocol? x 3))

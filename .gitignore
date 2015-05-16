@@ -13,6 +13,13 @@ $RECYCLE.BIN/
 *.msi
 *.msm
 *.msp
+*.bak
+*.rkt~
+*.slip~
+
+majordomo/complete code.rkt
+majordomo/compiled
+steward/compiled/
 
 # Windows shortcuts
 *.lnk

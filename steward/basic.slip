@@ -1,0 +1,104 @@
+
+;-----------------------------------------------------------------------------------------------------------------------
+;------------------------------------------------------ basic ----------------------------------------------------------
+;-----------------------------------------------------------------------------------------------------------------------;
+
+;basis abstraties
+(define empty-list '())
+(define none-left? null?)
+(define conjoin cons)
+(define first car)
+(define next cdr)
+(define my-loop map)
+
+(define (update args-less-lambda)
+  (args-less-lambda))
+
+(define (erase-by-copy lst el comp-function)
+  (define (loop build resolt)
+    (cond ((none-left? build) resolt)
+          ((comp-function build el) (loop (next build) resolt))
+          (else (loop (next build)(conjoin (first build) resolt)))))
+  (loop lst empty-list))
+
+;voor port syntax
+(define (args->string list-of-strings)
+  (define (loop string list)
+    (if (none-left? list)
+        string
+        (loop (string-append (string-append string ".") (car list))(cdr list))))
+  (loop (car list-of-strings) (cdr list-of-strings)))
+
+(define (string->args long-string)
+  (define stop (string-length long-string))
+  (define (loop prev index list)
+    (cond ((= index stop) (reverse (cons (substring long-string prev index) list)))
+          ((eq? #\. (string-ref long-string index))(loop (+ index 1)
+                                                         (+ index 1)
+                                                         (cons (substring long-string prev index) list))) ;substring stop op 3de argument (substring "apple" 1 3)-> pp (1ste + 2de , 3de niet)
+          (else (loop prev (+ 1 index) list))))
+  (loop 0 0 empty-list))
+
+;voor xbee
+(define (to-xbee str)
+  (define size (string-length str))
+  (define resolt (make-bytevector (+ 1 size)))
+  (define (loop i)
+    (define hex (char->integer (string-ref str i)))
+    (bytevector-set! resolt i hex)
+    (if (< (+ 1 i) size)
+        (loop (+ i 1))
+        (begin (bytevector-set! resolt (+ 1 i) 10)   
+               resolt)))
+  (loop 0))
+
+;zit een bepaalde sequentie van integers in de frame?
+(define (contains? frame1 message offset) ;frame 1 komt van xbee: heeft meer integers dan enkel gezochte data 
+  (define (loop i)
+    (cond ((zero? i) #t)
+          ((equal? (bytevector-ref frame1 (+ offset i))(bytevector-ref message i))
+           (loop (- i 1)))
+          (else #f)))
+  (loop (- (bytevector-length message) 1)))
+
+;haalt device-power uit een 0X90 frame
+(define (device-power frame)
+  (if (contains? frame #u8(80 79 87 61 79 78 10) 12)
+      "ON"
+      "OFF"))
+
+;frame 1 komt van xbee: heeft meer integers dan enkel gezochte data 
+;we weten dat repetitie binnen message onmogelijk is
+(define (extract-usage frame1) 
+  (define (find-W i) ;vind de W van watt (staat voor de 3de laatste /n)
+    (if (equal? (bytevector-ref frame1 i) 10)
+        (- i 1)
+        (find-W (- i 1))))
+  (define (find-load i)
+    (if (equal? (bytevector-ref frame1 i) 61) ;integer voorstelling voor char =
+        i
+        (find-load (- i 1))))
+  (define (make-number number start stop)
+    (if (eq? start stop)
+        number
+        (make-number (+ (* 10 number)(- (bytevector-ref frame1 start) 48))
+                     (+ start 1) stop)))
+  (define stop (find-W (- (bytevector-length frame1) 3))) ;begin voor dubbele endline
+  (define start (find-load stop))
+  (make-number 0 (+ 1 start) stop))
+
+(define (device-usage frame)
+  (if (equal? (device-power frame) "OFF")
+      0
+      (extract-usage frame)))
+
+(define (repeat x function)
+  (define (loop x)
+    (if (zero? x)
+        'return
+        (begin (function)
+               (loop (- x 1)))))
+  (if (< x 0)
+      (loop (- x))
+      (loop x)))
+

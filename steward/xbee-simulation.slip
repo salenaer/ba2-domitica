@@ -1,0 +1,102 @@
+(load "basic")
+(load "device")
+(load "queue")
+
+(define (xbee-init xbee-loc baudrate)
+  (define (xbee-node product-id address device)(vector product-id address device))
+  (define (get-product-id x)(vector-ref x 0))
+  (define (get-address x)(vector-ref x 1))
+  (define (get-thread x) (vector-ref x 2))
+  
+  (let (
+        (devices '())
+        (buffer (make-queue))
+        (payloadlist (make-queue))
+        )
+    
+    (define (add-device lst)
+      (let ((product-id (first lst))
+            (address (first (next lst))))
+        (set! devices (conjoin (xbee-node product-id address (make-device)) devices))))
+    
+    (define (remove-device address)
+      (set! devices (erase-by-copy devices address (lambda (dev-list address) (equal? (get-address (first dev-list)) address)))))
+    
+    (define (find-device address)
+      (define (loop lst)
+        (cond ((none-left? lst)  #f)
+              ((equal? (get-address (first lst)) address)(first lst))
+              (else (loop (next lst)))))
+      (loop devices))
+    
+    ;bij een echte xbee moet xbee-tick gebruikt worden om de buffer te vullen met frames
+    (define (tick)
+      (define (loop i)
+        (if (queue-empty? buffer)
+            i
+            (begin (enqueue payloadlist (serve buffer))
+                   (loop (+ 1 i)))))
+      (loop 0))
+    
+    ;staat er iets in payloadlist van xbee
+    (define (ready?)
+      (not (queue-empty? payloadlist)))
+    
+    (define (read-frame)
+      (if (queue-empty? payloadlist)
+          (begin (display "Cannot read byte: payloadlist is empty")
+                 (error ": protocol error ... Nothing to read on Xbee device"))
+          (serve payloadlist)))
+    
+    (define (xbee-write-sim args)
+      (let ((address (first args))
+            (message (first (next args))))
+        (let ((device (find-device address)))
+          (if device
+              (begin (enqueue buffer #u8(139 5 198 181 0 0 0)) ;bericht verstuurt
+                     (enqueue buffer ((get-thread device) message))) ;ack/nack/get
+              (error "could not send message: address not found")))))
+      
+      (define (discover)
+        (map (lambda (xbee-node)(list (get-product-id xbee-node)(get-address xbee-node))) devices))
+      
+      (define (process message . args)
+        (cond
+          ((equal? message "add-device") (add-device args))
+          ((equal? message "remove-device") (remove-device (first args)))
+          ((equal? message "xbee-tick") (tick))
+          ((equal? message "xbee-ready?") (ready?))
+          ((equal? message "xbee-read") (read-frame))
+          ((equal? message "xbee-write") (xbee-write-sim args))
+          ((equal? message "xbee-discover")(discover))
+          (else (error "xbee simulation unkown message")(display message))))
+      process
+      ))
+  
+  ;xbee procedures: 
+  ;(xbee-init "/dev/ttyUSB0" 9600) zie hierboven
+  
+  ;(xbee-tick xbee)
+  (define (xbee-tick xbee)
+    (xbee "xbee-tick"))
+  
+  ;(xbee-ready? xbee)	
+  (define (xbee-ready? xbee)
+    (xbee "xbee-ready?"))
+  
+  ;(xbee-read-frame xbee)
+  (define (xbee-read xbee)
+    (xbee "xbee-read"))
+  
+  ;(xbee-discover-nodes xbee) moet elk element uit de kamer toevoegen aan de xbee-list, commando wordt gedefinieerd in steward
+  
+  ;(xbee-list-nodes) mag alleen worden opgeroepen in steward en wordt ook daar gedefinieerd
+  
+  ;(xbee-write xbee device message)
+  (define (xbee-write xbee target message)
+    (display "xbee-write called")(newline)
+    ;(display "xbee-write called with: ")(newline)
+    ;(display "target: ")(display target)(newline)
+    ;(display "message: ")(display message)(newline)
+    (xbee "xbee-write" target message)
+    (display "xbee-write done")(newline))

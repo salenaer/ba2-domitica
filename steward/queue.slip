@@ -1,0 +1,48 @@
+;-----------------------------------------------------------------------------------------------------------------------
+;-------------------------------------------------------- queue --------------------------------------------------------
+;-----------------------------------------------------------------------------------------------------------------------
+
+;een normaal queue adt
+
+(define (make-queue)
+  (cons 'queue (cons '() '())))
+
+(define (queue? queue)
+  (and (pair? queue)(eq? 'queue (car queue))))
+
+(define (queue-tail queue)
+  (cddr queue))
+
+(define (queue-tail! queue el)
+  (set-cdr! (cdr queue) el))
+
+(define (queue-head queue)
+  (cadr queue))
+
+(define (queue-head! queue el)
+  (set-car! (cdr queue) el))
+
+(define (queue-empty? queue)
+  (if (queue? queue)
+      (null? (queue-head queue))
+      (error "queue-empty?: given argument is not a queue")))
+
+(define (enqueue queue el)
+  (if (queue? queue)
+      (let ((element (cons el '())))
+        (if (queue-empty? queue)
+            (queue-head! queue element)
+            (set-cdr! (queue-tail queue) element))
+        (queue-tail! queue element))
+      (error "enqueue: given argument (first) is not a queue")))
+
+(define (serve queue)
+  (if (queue? queue)
+      (if (queue-empty? queue)
+          (error "server: queue is already empty")
+          (let ((answer (car (queue-head queue))))
+            (queue-head! queue (cdr (queue-head queue)))
+            (if (queue-empty? queue)
+                (queue-tail! queue (queue-head queue)))
+            answer))
+      (error "serve given argument is not a queue")))

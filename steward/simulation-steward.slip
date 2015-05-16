@@ -1,0 +1,220 @@
+;-----------------------------------------------------------------------------------------------------------------------
+;------------------------------------------------- simulation steward --------------------------------------------------
+;-----------------------------------------------------------------------------------------------------------------------
+(define (make-steward steward-id ip)
+  ;abstracties
+  (define (steward-node name protocol address)(vector name protocol address))
+  (define (get-name x)(vector-ref x 0))
+  (define (get-protocol x) (vector-ref x 1))
+  (define (get-address x) (vector-ref x 2))
+  
+  (let (
+        (devices '())
+        (xbee-nodes '())
+        (steward-in-port 0)
+        (steward-out-port 0)
+        (xbee (xbee-init "/dev/ttyUSB0" 9600))
+        )
+    
+    ;maak connectie met majordomo
+    (let ((port-pair (tcp-connect ip 6666)))
+      (set! steward-in-port (car port-pair))
+      (set! steward-out-port (cdr port-pair)))
+    
+    ;voor simulatie--------------------------------------------------------------------------------------------------------
+    (define (xbee-list)
+      xbee-nodes)
+    
+    (define (xbee-discover xbee) ;mogelijk te simplistisch
+      (set! xbee-nodes (xbee "xbee-discover")))      
+    
+    ;setters----------------------------------------------------------------------------------------------------------------
+    
+    ;om devices toe te voegen: 
+    ;1) kijk op doos voor product id: voorbeeld ZBS110V2120901 (done)
+    ;2) steek device in  (done)
+    ;3) voeg device toe aan majordomo (done)
+    ;4) majordomo stuurt naar juiste steward, check device existence
+    ;5) xbee van steward stuurt discover nodes
+    ;6) xbee van steward roept list nodes
+    ;7) kijk op id in list node zit
+    ;8) zeg tegen majordomo of dit device mag toegevoegd worden
+    
+    (define (add-device args)
+      (let ((device-name (first args))
+            (protocol (string->number (first (next args))))
+            (product-id (first (next (next args)))))
+        (define (check-availability list)
+          (cond ((null? list)  #f) ;device met opgegeven id is niet gevonden, weiger add-device
+                ((eq? (caar list) product-id) (cadar list)) ;associatie lijst van xbee => geen abstractie
+                (else (check-availability (cdr list)))))
+        ;in simulatie moet iemand de device objecten die bestaan bijhouden => die iemand is xbee
+        ;normaal wordt address toe gekent door modem? in simulatie is er geen address dus gebruik device-naam als address
+        ;dit is in de simulatie alleen maar een key om het racket object te vinden, namen zijn uniek binnen steward!
+        (xbee "add-device" product-id device-name) 
+        (xbee-discover xbee) ;vult de xbee-list aan, xbee stuurt signaal uit, stap 5
+        (sleep 1000)
+        (xbee-tick xbee) ;moet gebeuren in echte wereld na sleep omdat zigbee devices tijd nodig hebben om te antwoorden, list-nodes is nu geupdate
+        (let ((address (check-availability (xbee-list)))) ;stap 6 en 7
+          (if address
+              (begin (set! devices (conjoin (steward-node device-name protocol address) devices))
+                     (write "device added" steward-out-port)) ;stap 8
+              (write "address not found" steward-out-port)))))
+    
+    (define (remove-device device-name)
+      (xbee "remove-device" device-name)
+      (set! devices (erase-by-copy devices device-name (lambda (dev-list dev-name) (equal? (get-name (first dev-list)) dev-name)))))
+    
+    ;maak de buffer van de xbee leeg
+    (define (empty-xbee xbee)
+      (define (loop)
+        (if (xbee-ready? xbee)
+            (begin (xbee-read xbee)
+                   (loop))
+            'done))
+      (xbee-tick xbee)
+      (loop))
+    
+    ;zorgt ervoor dat een verstuurt bericht zeker aankomt
+    (define (assure-arrival xbee address message)
+      (define (read-status) ;moet status report krijgen
+        (if (xbee-ready? xbee)
+            (begin (let ((frame (xbee-read xbee)))
+                     (if (and (equal? (bytevector-ref frame 0) 139) ;139 decimaal = 8B hex = delivery status
+                              (zero? (bytevector-ref frame 6))) ;0 decimaal = 00 hex = Success
+                         #t
+                         (read-status))))
+            #f))  
+      (define (loop x)
+        (if (zero? x)
+            #f
+            (begin 
+              (repeat 10 (lambda ()(xbee-write xbee address message)))
+              (display "repeat is done")(newline)
+              (sleep 1000)
+              (xbee-tick xbee)
+              (if (read-status) ;empty krijgt delivery succes
+                  #t
+                  (loop (- x 1))))))
+      (empty-xbee xbee)
+      (loop 10))    
+    
+    ;xbee verzekert mij dat mijn SET POW=ON/OFF bericht is aangekomen er moet wel een ack komen
+    (define (get-ack xbee message)
+      (define message-size (bytevector-length message))
+      (define frame-size (+ 13 message-size)) ;12 voor echte data te krijgen, 1 voor extra \n
+      (define (correct-frame? frame)
+        (and 
+         (eq? (bytevector-ref frame 0) 144)
+         (eq? frame-size (bytevector-length frame))
+         (contains? frame message 12)))
+      (define (loop)
+        (if (xbee-ready? xbee)
+            (if (correct-frame? (xbee-read xbee))
+                #t
+                (loop))
+            (begin (sleep 1000)
+                   (xbee-tick xbee)
+                   (loop))))
+      (loop))
+    
+    ;xbee verzekert mij dat mijn GET bericht is aangekomen er moet wel een ack komen
+    (define (get-data-ack xbee)
+      (define (correct-frame? frame)
+        (and 
+         (eq? (bytevector-ref frame 0) 144)
+         (> (bytevector-length frame) 34)
+         (contains? frame #u8(80 79 87) 12))) ;als een pow in een frame zit is deze frame in antwoord op "GET"
+      (define (loop)
+        (if (xbee-ready? xbee)
+            (let ((frame (xbee-read xbee)))
+              (if (correct-frame? frame)
+                  frame
+                  (loop)
+                  ))
+            (begin (sleep 1000)
+                   (xbee-tick xbee)
+                   (loop))))
+      (loop))
+    
+    (define (turn-on xbee lamp)
+      (define message (to-xbee "SET POW=ON"))
+      (display "turn-on: message = ")(display message)(newline)
+      (if (assure-arrival xbee lamp message) 
+          (get-ack xbee (to-xbee "ack: set pow=on"))
+          (display "error: device unreachable"))) 
+    
+    (define (turn-off xbee lamp)
+      (define message (to-xbee "SET POW=OFF"))
+      (if (assure-arrival xbee lamp message)
+          (get-ack xbee (to-xbee "ack: set pow=off"))
+          (display "error: device unreachable")))
+    
+    (define (get-data xbee lamp)
+      (define message (to-xbee "GET"))
+      (if (assure-arrival xbee lamp message)
+          (get-data-ack xbee)
+          (display "error: device unreachable")))
+    
+    ;eigenlijk functies van steward-----------------------------------------------------------------------------------------
+    (define (find-device device-name)
+      (define (loop lst)
+        (cond ((none-left? lst) #f)
+              ((equal? (get-name (first lst)) device-name)(first lst))
+              (else (loop (next lst)))))
+      (loop devices))
+    
+    ;kan niet conflicteren met read en writes van andere procedures vanwege werking majordomo
+    (define (get-usage-all)
+      (define (loop lst resolt)
+        (cond ((none-left? lst) (write resolt steward-out-port));(flush-output steward-out-port))
+              ((usage? (get-protocol (first lst)));heeft dit device een verbruik meter?
+               (loop (next lst)
+                     (conjoin (conjoin (get-name (first lst))(device-usage (get-data xbee (get-address (first  lst)))))                                                   
+                                resolt)))
+              (else (loop (next lst) resolt))))
+      (loop devices '()))
+    
+    (define (turn-device-on device-name)
+      (let ((device (find-device device-name)))
+        (if device 
+            (if (turn-on xbee (get-address device))
+                (write "turned-on" steward-out-port)
+                (write "failed" steward-out-port))
+            (display "error: device not in list of devices in steward"))))
+    
+    (define (turn-device-off device-name)
+      (let ((device (find-device device-name)))
+        (if device
+            (if (turn-off xbee (get-address device))
+                (write "turned-off" steward-out-port)
+                (write "failed" steward-out-port))
+            (display "error: device not in list of devices in steward"))))
+    
+    (define (device-turned-on? device-name)
+      (let ((device (find-device device-name)))
+        (if device
+            (let ((frame (get-data xbee (get-address device))))
+              (display "device and frame found")
+              (if (equal? (device-power frame) "ON")
+                  (write "ON" steward-out-port)
+                  (write "OFF" steward-out-port)))
+            (display "error: device not in list of devices in steward"))))
+         
+    (define (process)
+      (if (char-ready? steward-in-port)
+          (let ((list-of-strings (string->args (read steward-in-port))))
+            (display steward-id)(display " ready: ")(display list-of-strings)(newline)
+            (cond
+              ((equal? (first list-of-strings) "add-device") (add-device (next list-of-strings)))
+              ((equal? (first list-of-strings) "erase-device") (remove-device (first (next list-of-strings))))
+              ((equal? (first list-of-strings) "turn-on")(turn-device-on (first (next list-of-strings))))
+              ((equal? (first list-of-strings) "turn-off")(turn-device-off (first (next list-of-strings))))
+              ((equal? (first list-of-strings) "turned-on?")(device-turned-on? (first (next list-of-strings))))
+              ((equal? (first list-of-strings) "get-usage-all") (get-usage-all))
+              (else (display "error: unkown command")(display (first list-of-strings))))
+            (flush-output steward-out-port))
+          ))
+    process
+    ))
+
